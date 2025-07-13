@@ -1,7 +1,4 @@
 # -*- coding: utf-8 -*-
-
-# Form implementation generated from reading ui file './maya_set.ui'
-#
 # Created by: PyQt5 UI code generator 5.15.10
 #
 # WARNING: Any manual changes made to this file will be lost when pyuic5 is
@@ -9,11 +6,11 @@
 
 import os
 import sys
+import importlib.util
+import subprocess
 from PyQt5 import QtCore, QtGui, QtWidgets
-from maya_processor import MayaSceneProcessor
-from script_processor import ScriptProcessor
-
-
+from processor.maya_processor import MayaSceneProcessor
+from processor.script_processor import ScriptProcessor
 
 
 class Ui_Form(object):
@@ -59,7 +56,20 @@ class Ui_Form(object):
         # Script List
         self.scriptList = QtWidgets.QListWidget(Form)
         self.scriptList.setObjectName("scriptList")
+        self.scriptList.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)  # Enable multi-select
         self.verticalLayout.addWidget(self.scriptList)
+
+        # MayaPy Path (horizontal layout)
+        self.horizontalLayout_4 = QtWidgets.QHBoxLayout()
+        self.horizontalLayout_4.setObjectName("horizontalLayout_4")
+        self.mayapyPathEdit = QtWidgets.QLineEdit(Form)
+        self.mayapyPathEdit.setObjectName("mayapyPathEdit")
+        self.mayapyPathEdit.setPlaceholderText("Path to mayapy.exe (e.g., C:\\Program Files\\Autodesk\\Maya2023\\bin\\mayapy.exe)")
+        self.horizontalLayout_4.addWidget(self.mayapyPathEdit)
+        self.mayapyBrowseButton = QtWidgets.QPushButton(Form)
+        self.mayapyBrowseButton.setObjectName("mayapyBrowseButton")
+        self.horizontalLayout_4.addWidget(self.mayapyBrowseButton)
+        self.verticalLayout.addLayout(self.horizontalLayout_4)
         
         # Process Button (centered)
         self.horizontalLayout_3 = QtWidgets.QHBoxLayout()
@@ -87,6 +97,7 @@ class Ui_Form(object):
         self.processButton.setText(_translate("Form", "&Process Scenes"))
         self.textEdit.setPlaceholderText(_translate("Form", "Sh01 ... Sh02 .. Sh03 .."))
         self.scriptBrowseButton.setText(_translate("Form", "Browse Scripts"))
+        self.mayapyBrowseButton.setText(_translate("Form", "Browse mayapy.exe"))
         self.label.setText(_translate("Form", "List of scenes"))
 
 class MayaProcessorApp(QtWidgets.QWidget):
@@ -110,7 +121,21 @@ class MayaProcessorApp(QtWidgets.QWidget):
         self.ui.pushButton.clicked.connect(self.browse_folder)
         self.ui.processButton.clicked.connect(self.process_scenes)
         self.ui.scriptBrowseButton.clicked.connect(self.browse_scripts)
+        self.ui.mayapyBrowseButton.clicked.connect(self.browse_mayapy)
         self.load_scripts(self.ui.scriptPathEdit.text())
+        self.set_default_mayapy_path()
+    
+    def set_default_mayapy_path(self):
+        """Try to find mayapy.exe in common locations"""
+        common_paths = [
+            r"C:\Program Files\Autodesk\Maya2023\bin\mayapy.exe",
+            r"C:\Program Files\Autodesk\Maya2022\bin\mayapy.exe",
+        ]
+        
+        for path in common_paths:
+            if os.path.exists(path):
+                self.ui.mayapyPathEdit.setText(path)
+                break
         
     def browse_folder(self):
         """Browse for folder containing Maya scenes"""
@@ -137,6 +162,18 @@ class MayaProcessorApp(QtWidgets.QWidget):
         if folder_path:
             self.ui.scriptPathEdit.setText(folder_path)
             self.load_scripts(folder_path)
+    
+    def browse_mayapy(self):
+        """Browse for mayapy.exe"""
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Locate mayapy.exe",
+            self.ui.mayapyPathEdit.text() or "C:\\",
+            "Executable Files (*.exe)"
+        )
+        
+        if file_path:
+            self.ui.mayapyPathEdit.setText(file_path)
 
     def load_scripts(self, folder_path):
         """Load Python scripts from specified folder"""
@@ -188,15 +225,50 @@ class MayaProcessorApp(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(self, "Error", f"Directory error: {str(e)}")
             
     def process_scenes(self):
-        """Process all found scenes"""
+        """Process all found scenes with selected scripts"""
         if not self.scene_files:
             QtWidgets.QMessageBox.warning(self, "Warning", "No scenes selected")
             return
             
-        results = self.processor.process_all()
+        selected_scripts = self.ui.scriptList.selectedItems()
+        if not selected_scripts:
+            QtWidgets.QMessageBox.warning(self, "Warning", "No scripts selected")
+            return
+        
+        mayapy_path = self.ui.mayapyPathEdit.text()
+        if not mayapy_path or not os.path.exists(mayapy_path):
+            QtWidgets.QMessageBox.critical(self, "Error", "Invalid mayapy.exe path")
+            return
+        
+        results = []
+        for script_item in selected_scripts:
+            script_path = script_item.data(QtCore.Qt.UserRole)
+            try:
+                # Run the script with mayapy.exe
+                cmd = [mayapy_path, script_path] + self.scene_files
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    check=True
+                )
+                
+                output = result.stdout
+                if result.stderr:
+                    output += f"\nERRORS:\n{result.stderr}"
+                
+                results.append(f"=== Results from {script_item.text()} ===")
+                results.append(output)
+                
+            except subprocess.CalledProcessError as e:
+                results.append(f"Error executing {script_item.text()}:\n{e.stderr}")
+            except Exception as e:
+                results.append(f"Error executing {script_item.text()}: {str(e)}")
+        
         self.ui.textEdit.clear()
         self.ui.textEdit.append("\n\n".join(results))
         QtWidgets.QMessageBox.information(self, "Complete", "Finished processing scenes")
+
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
