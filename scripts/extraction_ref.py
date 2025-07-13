@@ -1,92 +1,88 @@
 # maya_scene_info_extractor.py
 
-import maya.standalone
-import maya.cmds as cmds
 import json
 import os
-import pathlib
+import sys
+import maya.standalone
+import maya.cmds as cmds
 
-
-def initialize_maya():
-    """Initialize Maya in headless mode"""
+def setup_maya_environment():
+    """Initialize Maya in batch mode"""
     maya.standalone.initialize(name='python')
-    print("Maya initialized in headless mode")
+    # Suppress UI-related warnings but keep reference info
+    cmds.scriptEditorInfo(suppressWarnings=True)
+    cmds.scriptEditorInfo(suppressInfo=True)
+    cmds.scriptEditorInfo(suppressErrors=True)
 
 def get_scene_info(filepath):
-    """Extract scene information from a Maya file"""
+    """Extract reference information from a Maya file"""
     info = {
-        'filepath': filepath,
+        'filepath': filepath.replace('\\', '/'),
         'shot_name': os.path.splitext(os.path.basename(filepath))[0],
         'references': []
     }
-
-    # Get reference information
-    refs = cmds.ls(references=True)
-    if refs:
-        for ref in refs:
-            ref_node = cmds.referenceQuery(ref, referenceNode=True)
-            info['references'].append({
-                'name': ref,
-                'file': cmds.referenceQuery(ref_node, filename=True)
-            })
+    
+    try:
+        # Get all references
+        refs = cmds.ls(references=True)
+        if refs:
+            for ref in refs:
+                try:
+                    ref_node = cmds.referenceQuery(ref, referenceNode=True)
+                    ref_file = cmds.referenceQuery(ref_node, filename=True)
+                    info['references'].append({
+                        'name': ref,
+                        'file': ref_file.replace('\\', '/')
+                    })
+                except Exception:
+                    continue  # Skip problematic references
+    except Exception as e:
+        info['error'] = f"Error getting references: {str(e)}"
     
     return info
 
-def process_scenes(filepaths, output_file):
-    """Process list of Maya files and save extracted information"""
+def process(maya_scenes):
+    """Main processing function"""
     results = []
     
-    for filepath in filepaths:
-        try:
-            print(f"\nProcessing: {filepath}")
-            
-            # Open scene without loading references for faster processing
-            cmds.file(filepath, open=True, force=True, loadReferenceDepth='none')
-            
-            # Get scene information
-            scene_info = get_scene_info(filepath)
-            results.append(scene_info)
-            
-            print(f"Extracted information for: {scene_info['shot_name']}")
-            
-        except Exception as e:
-            print(f"Error processing {filepath}: {str(e)}")
-            results.append({
-                'filepath': filepath,
-                'error': str(e)
-            })
-    
-    # Save results to JSON file
-    with open(output_file, 'w') as f:
-        json.dump(results, f, indent=4)
-    
-    print(f"\nSaved results to: {output_file}")
-
-if __name__ == "__main__":
-    # List of Maya files to process
-    scene_files = [
-        r"V:\PAPA\Work\Render\PAPA_Movie\REEL_04\5. INT. KACHAXS CABIN - MOMENTS LATER\PAPA_Chapter_03_05_Sh082d\char.ma",
-        r"V:\PAPA\Work\Render\PAPA_Movie\REEL_04\5. INT. KACHAXS CABIN - MOMENTS LATER\PAPA_Chapter_03_05_Sh083\char.ma",
-        r"V:\PAPA\Work\Render\PAPA_Movie\REEL_04\5. INT. KACHAXS CABIN - MOMENTS LATER\PAPA_Chapter_03_05_Sh086\char.ma"
-    ]
-    
-    # Output JSON file
-    json_filepath = pathlib.Path(__file__).parent.resolve()
-    json_file = r"scene_ref_report.json"
-    output_json = os.path.join(json_filepath, json_file) 
-    
     try:
-        # Initialize Maya
-        initialize_maya()
+        setup_maya_environment()
         
-        # Process scenes
-        process_scenes(scene_files, output_json)
-        
-        # Shutdown Maya
-        maya.standalone.uninitialize()
-        print("\nProcessing completed successfully!")
-        
+        for filepath in maya_scenes:
+            scene_info = {
+                'filepath': filepath.replace('\\', '/'),
+                'shot_name': os.path.splitext(os.path.basename(filepath))[0],
+                'references': []
+            }
+            
+            try:
+                # Open scene without forcing (to avoid some warnings)
+                cmds.file(filepath, open=True, force=False, loadReferenceDepth='none')
+                
+                # Get scene information
+                scene_info = get_scene_info(filepath)
+                
+            except Exception as e:
+                scene_info['error'] = f"Failed to open scene: {str(e)}"
+            finally:
+                cmds.file(new=True, force=True)  # Clear the scene
+            
+            results.append(scene_info)
+    
     except Exception as e:
-        print(f"Error: {str(e)}")
+        return json.dumps({
+            'error': f"Initialization error: {str(e)}"
+        }, indent=4)
+    
+    finally:
         if 'maya.standalone' in globals():
             maya.standalone.uninitialize()
+    
+    # Return clean JSON data
+    return json.dumps(results, indent=4)
+
+if __name__ == "__main__":
+    # When run directly with mayapy, read scenes from command line arguments
+    if len(sys.argv) > 1:
+        scenes = sys.argv[1:]  # First arg is script path, rest are scene files
+        print(process(scenes))
