@@ -225,7 +225,7 @@ class MayaProcessorApp(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(self, "Error", f"Directory error: {str(e)}")
             
     def process_scenes(self):
-        """Process all found scenes with selected scripts"""
+        """Process all found scenes with selected scripts and display results in GUI"""
         if not self.scene_files:
             QtWidgets.QMessageBox.warning(self, "Warning", "No scenes selected")
             return
@@ -241,6 +241,7 @@ class MayaProcessorApp(QtWidgets.QWidget):
             return
         
         results = []
+        
         for script_item in selected_scripts:
             script_path = script_item.data(QtCore.Qt.UserRole)
             try:
@@ -253,20 +254,40 @@ class MayaProcessorApp(QtWidgets.QWidget):
                     check=True
                 )
                 
-                output = result.stdout
+                # Parse the JSON output
+                try:
+                    import json
+                    output_data = json.loads(result.stdout)
+                    
+                    # Format the output for display
+                    formatted_output = f"=== Results from {script_item.text()} ===\n"
+                    for scene in output_data:
+                        formatted_output += f"\nFile: {scene['filepath']}\n"
+                        formatted_output += f"Shot: {scene['shot_name']}\n"
+                        formatted_output += "References:\n"
+                        for ref in scene.get('references', []):
+                            formatted_output += f"  - {ref['name']}: {ref['file']}\n"
+                        if 'error' in scene:
+                            formatted_output += f"Error: {scene['error']}\n"
+                    
+                    results.append(formatted_output)
+                    
+                except json.JSONDecodeError:
+                    # If not JSON, show raw output
+                    results.append(f"=== Results from {script_item.text()} ===\n{result.stdout}")
+                
                 if result.stderr:
-                    output += f"\nERRORS:\n{result.stderr}"
-                
-                results.append(f"=== Results from {script_item.text()} ===")
-                results.append(output)
-                
+                    results.append(f"\nERRORS:\n{result.stderr}")
+                    
             except subprocess.CalledProcessError as e:
                 results.append(f"Error executing {script_item.text()}:\n{e.stderr}")
             except Exception as e:
                 results.append(f"Error executing {script_item.text()}: {str(e)}")
         
+        # Display results in the UI
         self.ui.textEdit.clear()
         self.ui.textEdit.append("\n\n".join(results))
+            
         QtWidgets.QMessageBox.information(self, "Complete", "Finished processing scenes")
 
 
